@@ -25,7 +25,7 @@ describe('Suite de Pruebas de Calidad de Software', () => {
     })
   })
 
-  describe('Pruebas de Integración - API Endpointss', () => {
+  describe('Pruebas de Integración - API Endpointsss', () => {
     test('GET /health - Debe responder con status 200 y JSON correcto', async () => {
       const response = await request(app).get('/health')
       expect(response.statusCode).toBe(200)
