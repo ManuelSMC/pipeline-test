@@ -14,7 +14,7 @@ describe('Suite de Pruebas de Calidad de Software', () => {
       expect(result).toBe(0)
     })
 
-    test('Validación extra: Debe retornar 0 cuando stock es negativo', () => {
+    test('Validaciónn extra: Debe retornar 0 cuando stock es negativo', () => {
       const result = calculateValue(10, -1)
       expect(result).toBe(0)
     })
