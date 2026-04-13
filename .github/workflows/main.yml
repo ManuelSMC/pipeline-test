@@ -137,18 +137,18 @@ jobs:
             echo "Actualizando Nginx para apuntar a: $TARGET_COLOR en puerto $TARGET_PORT"
 
             ssh -o StrictHostKeyChecking=no manuelsmc2004@10.0.1.3 "
-              sudo tee /etc/nginx/sites-available/default > /dev/null <<EOF
+              sudo tee /etc/nginx/sites-available/default > /dev/null <<'NGINXEOF'
             server {
                 listen 80;
                 server_name _;
                 location / {
                     proxy_pass http://10.0.2.2:$TARGET_PORT;
-                    proxy_set_header Host \\\$host;
-                    proxy_set_header X-Real-IP \\\$remote_addr;
-                    proxy_set_header X-Forwarded-For \\\$proxy_add_x_forwarded_for;
+                    proxy_set_header Host \$host;
+                    proxy_set_header X-Real-IP \$remote_addr;
+                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
                 }
             }
-            EOF
+            NGINXEOF
               sudo nginx -t && sudo systemctl reload nginx
               echo 'Nginx actualizado correctamente'
             "
