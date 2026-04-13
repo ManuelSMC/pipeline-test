@@ -1,31 +1,140 @@
-name: Node.js CI
+name: Blue-Green CI/CD Pipeline
 
 on:
   push:
     branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+
   test:
+    name: 1. Tests y Lint
     runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        node-version: [22.20.0, 18.x]
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: '18.x'
           cache: 'npm'
-
-      - name: Install dependencies
+      - name: Instalar dependencias
         run: npm install
-
-      - name: Run Jest tests
+      - name: Ejecutar tests
         run: npm test
+      - name: Ejecutar lint
+        run: npm run lint
+
+  build-and-push:
+    name: 2. Build y Push imagen Docker
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Login a GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Extraer metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+      - name: Build y Push imagen
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  deploy:
+    name: 3. Deploy Blue-Green
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via Bastion
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          proxy_host: ${{ secrets.BASTION_HOST }}
+          proxy_username: ${{ secrets.SERVER_USER }}
+          proxy_key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            # 1. Leer el color activo actual
+            source ~/current_deploy.env
+            echo "Color activo actualmente: $ACTIVE_COLOR"
+
+            # 2. Determinar el color objetivo (el opuesto)
+            if [ "$ACTIVE_COLOR" = "blue" ]; then
+              TARGET_COLOR=green
+              TARGET_PORT=3002
+              ACTIVE_PORT=3001
+            else
+              TARGET_COLOR=blue
+              TARGET_PORT=3001
+              ACTIVE_PORT=3002
+            fi
+            echo "Desplegando en: $TARGET_COLOR (puerto $TARGET_PORT)"
+
+            # 3. Login a GHCR
+            echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+            # 4. Descargar nueva imagen
+            docker pull ghcr.io/manuelsmc/pipeline-test:main
+
+            # 5. Detener y eliminar el contenedor del color objetivo si existe
+            docker stop fast-api-$TARGET_COLOR || true
+            docker rm fast-api-$TARGET_COLOR || true
+
+            # 6. Desplegar en el color objetivo usando envsubst
+            export APP_COLOR=$TARGET_COLOR
+            export APP_PORT=$TARGET_PORT
+            export IMAGE=ghcr.io/manuelsmc/pipeline-test:main
+
+            docker run -d \
+              --name fast-api-$TARGET_COLOR \
+              --restart always \
+              -p $TARGET_PORT:3000 \
+              -e APP_COLOR=$TARGET_COLOR \
+              $IMAGE
+
+            # 7. Esperar que arranque
+            sleep 5
+
+            # 8. Verificar que el nuevo contenedor responde
+            curl -f http://localhost:$TARGET_PORT || exit 1
+            echo "Contenedor $TARGET_COLOR respondiendo correctamente"
+
+            # 9. Actualizar Nginx para apuntar al nuevo color
+            sudo tee /etc/nginx/sites-available/default > /dev/null <<EOF
+            server {
+                listen 80;
+                server_name _;
+                location / {
+                    proxy_pass http://localhost:$TARGET_PORT;
+                    proxy_set_header Host \$host;
+                    proxy_set_header X-Real-IP \$remote_addr;
+                }
+            }
+            EOF
+
+            # 10. Recargar Nginx
+            sudo nginx -t && sudo systemctl reload nginx
+
+            # 11. Actualizar el archivo de estado
+            echo "ACTIVE_COLOR=$TARGET_COLOR" > ~/current_deploy.env
+            echo "Despliegue completado. Ahora activo: $TARGET_COLOR en puerto $TARGET_PORT"
+
+            # 12. Detener el color anterior (opcional, lo dejamos como respaldo)
+            echo "Color anterior ($ACTIVE_COLOR) en puerto $ACTIVE_PORT queda como respaldo"
