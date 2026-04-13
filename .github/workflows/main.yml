@@ -123,7 +123,7 @@ jobs:
     needs: deploy-app
     runs-on: ubuntu-latest
     steps:
-      - name: Leer estado y actualizar Nginx
+      - name: Leer estado y actualizar Nginx via Bastion
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SERVER_HOST }}
@@ -133,29 +133,22 @@ jobs:
           proxy_username: ${{ secrets.SERVER_USER }}
           proxy_key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            # Leer el estado actualizado
             source ~/current_deploy.env
-            echo "Apuntando Nginx a: $TARGET_COLOR en puerto $TARGET_PORT"
+            echo "Actualizando Nginx para apuntar a: $TARGET_COLOR en puerto $TARGET_PORT"
 
-      - name: Actualizar config de Nginx
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.NGINX_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: |
-            # Actualizar config de Nginx apuntando al nuevo color
-            sudo tee /etc/nginx/sites-available/default > /dev/null <<EOF
+            ssh -o StrictHostKeyChecking=no manuelsmc2004@10.0.1.3 "
+              sudo tee /etc/nginx/sites-available/default > /dev/null <<EOF
             server {
                 listen 80;
                 server_name _;
                 location / {
-                    proxy_pass http://10.0.2.2:${{ needs.deploy-app.outputs.target_port }};
-                    proxy_set_header Host \$host;
-                    proxy_set_header X-Real-IP \$remote_addr;
-                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                    proxy_pass http://10.0.2.2:$TARGET_PORT;
+                    proxy_set_header Host \\\$host;
+                    proxy_set_header X-Real-IP \\\$remote_addr;
+                    proxy_set_header X-Forwarded-For \\\$proxy_add_x_forwarded_for;
                 }
             }
             EOF
-            sudo nginx -t && sudo systemctl reload nginx
-            echo "Nginx actualizado correctamente"
+              sudo nginx -t && sudo systemctl reload nginx
+              echo 'Nginx actualizado correctamente'
+            "
