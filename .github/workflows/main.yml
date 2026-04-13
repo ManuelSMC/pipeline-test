@@ -119,11 +119,11 @@ jobs:
             echo "Despliegue completado. Ahora activo: $TARGET_COLOR"
 
   deploy-nginx:
-    name: 4. Actualizar Nginx
+    name: 4. Actualizar Nginx con envsubst
     needs: deploy-app
     runs-on: ubuntu-latest
     steps:
-      - name: Leer estado y actualizar Nginx via Bastion
+      - name: Actualizar Nginx via Bastion con envsubst
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SERVER_HOST }}
@@ -133,22 +133,29 @@ jobs:
           proxy_username: ${{ secrets.SERVER_USER }}
           proxy_key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
+            # 1. Leer estado actual
             source ~/current_deploy.env
             echo "Actualizando Nginx para apuntar a: $TARGET_COLOR en puerto $TARGET_PORT"
 
+            # 2. Descargar el template desde el repo
+            curl -o /tmp/nginx.conf.template \
+              https://raw.githubusercontent.com/ManuelSMC/pipeline-test/main/nginx.conf.template
+
+            # 3. Usar envsubst para sustituir variables en el template
+            export TARGET_PORT=$TARGET_PORT
+            envsubst '${TARGET_PORT}' < /tmp/nginx.conf.template > /tmp/nginx.conf.final
+
+            # 4. Verificar el resultado
+            echo "Config generada:"
+            cat /tmp/nginx.conf.final
+
+            # 5. Copiar la config al nginx-server via SSH
             ssh -o StrictHostKeyChecking=no manuelsmc2004@10.0.1.3 "
-              sudo tee /etc/nginx/sites-available/default > /dev/null <<'NGINXEOF'
-            server {
-                listen 80;
-                server_name _;
-                location / {
-                    proxy_pass http://10.0.2.2:$TARGET_PORT;
-                    proxy_set_header Host \$host;
-                    proxy_set_header X-Real-IP \$remote_addr;
-                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-                }
-            }
-            NGINXEOF
+              sudo tee /etc/nginx/sites-available/default > /dev/null
+            " < /tmp/nginx.conf.final
+
+            # 6. Recargar Nginx
+            ssh -o StrictHostKeyChecking=no manuelsmc2004@10.0.1.3 "
               sudo nginx -t && sudo systemctl reload nginx
-              echo 'Nginx actualizado correctamente'
+              echo 'Nginx actualizado correctamente con envsubst'
             "
